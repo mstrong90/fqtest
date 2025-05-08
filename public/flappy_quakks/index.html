@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- allow edge-to-edge under notches/toolbars -->
+  <meta name="viewport"
+        content="width=device-width,
+                 initial-scale=1,
+                 maximum-scale=1,
+                 user-scalable=no,
+                 viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Flappy Quakks</title>
+  <base href="/flappy_quakks/">
+
+  <!-- 1% of viewport height, updated on resize -->
+  <script>
+    function setVh() {
+      document.documentElement.style.setProperty(
+        '--vh',
+        `${window.innerHeight * 0.01}px`
+      );
+    }
+    window.addEventListener('resize', setVh);
+    setVh();
+  </script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="orientation-overlay">
+    📱<br>
+    Please rotate your device<br>
+    back to portrait mode to play.
+  </div>
+
+  <script async src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script type="module" src="script.js"></script>
+
+
+  <!-- keep your Cloudflare anti-bot iframe snippet if you need it -->
+  <script>(function(){ /* …Cloudflare snippet… */ })();</script>
+</body>
+</html>
