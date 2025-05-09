@@ -70,6 +70,8 @@ const SOUNDS = {
 
 // — State & core variables
 let state = 'MODE_SELECT';
+let lastDifficultyScore = 0;
+let difficultyCycle = 0;  // track difficulty increases
 let gameMode = null;
 let lastTime = 0;
 let spawnTimer = 0;
@@ -84,12 +86,13 @@ const bird = { x: 0, y: 0, vy: 0, w: BIRD_W * BIRD_SCALE, h: BIRD_H * BIRD_SCALE
 
 // — Buttons
 const Btn = {
-  classic: { x: 0, y: 0, w: 150, h: 50, label: 'Classic' },
-  speedRun: { x: 0, y: 0, w: 150, h: 50, label: 'Speed Run' },
-  chooseQuakk: { x: 0, y: 0, w: 150, h: 50, label: 'Choose Quakk' },
-  start: { x: 0, y: 0, w: 150, h: 50, label: 'Start' },
-  leaderboard: { x: 0, y: 0, w: 150, h: 50, label: 'Leaderboard' },
-  srLeaderboard: { x: 0, y: 0, w: 150, h: 50, label: 'SR Leaderboard' }
+  classic:       { x: 0, y: 0, w: 150, h: 50, label: 'Classic' },
+  speedRun:      { x: 0, y: 0, w: 150, h: 50, label: 'Speed Run' },
+  chooseQuakk:   { x: 0, y: 0, w: 150, h: 50, label: 'Choose Quakk' },
+  start:         { x: 0, y: 0, w: 150, h: 50, label: 'Start' },
+  leaderboard:   { x: 0, y: 0, w: 150, h: 50, label: 'Leaderboard' },
+  srLeaderboard: { x: 0, y: 0, w: 150, h: 50, label: 'Speed Run\nLeaderboard' },
+  back:          { x: 0, y: 0, w: 150, h: 50, label: 'Back' }
 };
 
 // — Hit areas for duck selection
@@ -102,8 +105,7 @@ let loadedImages = 0;
 const TOTAL_IMAGES = SPRITES.bg.length + SPRITES.pipe.length + 1 + SPRITES.bird.length + SPRITES.nums.length + 1 + 1;
 
 function loadImage(src, store, key) {
-  const img = new Image();
-  img.src = src;
+  const img = new Image(); img.src = src;
   img.onload = () => { store[key] = img; if (++loadedImages === TOTAL_IMAGES) init(); };
   img.onerror = () => console.error('Failed to load:', src);
 }
@@ -131,7 +133,20 @@ refillVariantBag();
 function randInt(min, max) { return Math.floor(min + Math.random() * (max - min + 1)); }
 function intersect(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
 
-// — Load saved duck from server & localStorage
+// — Pipe creation
+function createPipe(x) {
+  const settings = gameMode === 'SPEED_RUN' ? SpeedRunSettings : CLASSIC_SETTINGS;
+  const margin = Math.floor(HEIGHT * 0.2);
+  const gapY = randInt(margin, HEIGHT - settings.PIPE_GAP - margin);
+  return { x, y: gapY, scored: false };
+}
+function spawnInitial() {
+  pipes = [];
+  const pw = IMG.pipe0.width;
+  pipes.push(createPipe(WIDTH + pw * 6));
+}
+
+// — Load saved duck
 async function loadServerVariant() {
   try {
     const tg = window.Telegram.WebApp;
@@ -176,16 +191,13 @@ function handlePointer(e) {
   const my = (cy - rect.top) * (HEIGHT / rect.height);
 
   if (state === 'MODE_SELECT') {
-    if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.classic)) {
-      gameMode = 'CLASSIC'; state = 'WELCOME'; drawWelcome();
-    } else if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.speedRun)) {
-      gameMode = 'SPEED_RUN'; state = 'WELCOME'; drawWelcome();
-    } else if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.chooseQuakk)) {
-      state = 'PICK_QUAKK'; drawQuakkSelection();
-    }
+    if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.classic)) { gameMode = 'CLASSIC'; state = 'WELCOME'; drawWelcome(); }
+    else if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.speedRun)) { gameMode = 'SPEED_RUN'; state = 'WELCOME'; drawWelcome(); }
+    else if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.chooseQuakk)) { state = 'PICK_QUAKK'; drawQuakkSelection(); }
   } else if (state === 'WELCOME') {
     if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.start)) startPlay();
     else if (intersect({ x: mx, y: my, w: 0, h: 0 }, gameMode === 'CLASSIC' ? Btn.leaderboard : Btn.srLeaderboard)) fetchLeaderboard();
+    else if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.back)) { state = 'MODE_SELECT'; drawModeSelect(); }
   } else if (state === 'PICK_QUAKK') {
     for (let i in chooseAreas) {
       const a = chooseAreas[i];
@@ -196,53 +208,34 @@ function handlePointer(e) {
         const user = tg.initDataUnsafe.user || {};
         const uname = user.username ? '@' + user.username : `${user.first_name}_${user.id}`;
         fetch(`${location.origin}/flappy_quakks/selectQuakk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: uname, variant: Number(i) })
         }).catch(console.error);
         state = 'MODE_SELECT'; drawModeSelect(); return;
       }
     }
-  } else if (state === 'PLAY') {
-    bird.flapped = true;
-  } else if (state === 'GAMEOVER') {
+  } else if (state === 'PLAY') { bird.flapped = true; }
+  else if (state === 'GAMEOVER') {
     if (intersect({ x: mx, y: my, w: 0, h: 0 }, Btn.start)) startPlay();
     else if (intersect({ x: mx, y: my, w: 0, h: 0 }, gameMode === 'CLASSIC' ? Btn.leaderboard : Btn.srLeaderboard)) fetchLeaderboard();
-  } else if (state === 'LEADERBOARD') {
-    state = 'WELCOME'; drawWelcome();
-  }
+  } else if (state === 'LEADERBOARD') { state = 'WELCOME'; drawWelcome(); }
 }
 
 // — Draw Mode Select
 function drawModeSelect() {
   ctx.drawImage(IMG.bg0, 0, 0, WIDTH, HEIGHT);
-  tileBase();
-  ctx.drawImage(IMG.msg, (WIDTH - IMG.msg.width) / 2, HEIGHT * 0.12);
-
-  // Position buttons
+  tileBase(); ctx.drawImage(IMG.msg, (WIDTH - IMG.msg.width) / 2, HEIGHT * 0.12);
   [Btn.classic, Btn.speedRun, Btn.chooseQuakk].forEach((b, i) => {
-    b.x = WIDTH / 2 - 75;
-    b.y = HEIGHT * (0.62 + i * 0.1);
+    b.x = WIDTH / 2 - 75; b.y = HEIGHT * (0.6 + i * 0.1);
     ctx.fillStyle = '#fff'; ctx.fillRect(b.x, b.y, b.w, b.h);
     ctx.fillStyle = '#000'; ctx.font = `${20 * (WIDTH / 288)}px Arial`;
-    ctx.fillText(
-      b.label,
-      b.x + (b.w - ctx.measureText(b.label).width) / 2,
-      b.y + 32 * (WIDTH / 288)
-    );
+    ctx.fillText(b.label, b.x + (b.w - ctx.measureText(b.label).width) / 2, b.y + 32 * (WIDTH / 288));
   });
-
-  // Draw duck right above 'Classic'
-  bird.frame = ++bird.frame % SPRITES.bird.length;
+  // Duck above Classic
   const duckX = Btn.classic.x + (Btn.classic.w - bird.w) / 2;
   const duckY = Btn.classic.y - bird.h - 10;
-  ctx.drawImage(
-    IMG[`bird${bird.variant}`],
-    duckX,
-    duckY + 8 * Math.sin(performance.now() / 200),
-    bird.w,
-    bird.h
-  );
+  const bob = 8 * Math.sin(performance.now() / 200);
+  ctx.drawImage(IMG[`bird${bird.variant}`], duckX, duckY + bob, bird.w, bird.h);
 }
 
 // — Draw Choose Quakk
@@ -259,47 +252,92 @@ function drawQuakkSelection() {
   for (let i = 0; i < SPRITES.bird.length; i++) {
     const col = i % cols, row = Math.floor(i / cols);
     const x = startX + col * (size + pad), y = startY + row * (size + pad);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; ctx.fillRect(x, y, size, size);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y, size, size);
     ctx.drawImage(IMG[`bird${i}`], x + 10, y + 10, size - 20, size - 20);
     chooseAreas[i] = { x, y, w: size, h: size };
   }
 }
 
 // — Draw Welcome
-function drawWelcome(){
-  ctx.drawImage(IMG.bg0,0,0,WIDTH,HEIGHT);
-  tileBase(); ctx.drawImage(IMG.msg,(WIDTH-IMG.msg.width)/2,HEIGHT*0.12);
-  bird.frame = ++bird.frame % SPRITES.bird.length;
-  ctx.drawImage(IMG[`bird${bird.frame}`],bird.x,bird.y+8*Math.sin(performance.now()/200),bird.w,bird.h);
-  Btn.start.x=WIDTH/2-75; Btn.start.y=HEIGHT*0.6;
-  const lb=gameMode==='CLASSIC'?Btn.leaderboard:Btn.srLeaderboard;
-  lb.x=WIDTH/2-75; lb.y=HEIGHT*0.7;
-  [Btn.start,lb].forEach(b=>{ctx.fillStyle='#fff';ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.fillStyle='#000';ctx.font=`${20*(WIDTH/288)}px Arial`;
-    ctx.fillText(b.label,b.x+(b.w-ctx.measureText(b.label).width)/2,b.y+32*(WIDTH/288));});
+function drawWelcome() {
+  ctx.drawImage(IMG.bg0, 0, 0, WIDTH, HEIGHT);
+  tileBase(); ctx.drawImage(IMG.msg, (WIDTH - IMG.msg.width) / 2, HEIGHT * 0.12);
+  // Buttons: Start, Leaderboard or SR Leaderboard, Back
+  Btn.start.x = WIDTH / 2 - 75; Btn.start.y = HEIGHT * 0.6;
+  const lb = gameMode === 'CLASSIC' ? Btn.leaderboard : Btn.srLeaderboard;
+  lb.x = WIDTH / 2 - 75; lb.y = HEIGHT * 0.7;
+  Btn.back.x = WIDTH / 2 - 75; Btn.back.y = HEIGHT * 0.8;
+  // Draw buttons
+  [Btn.start, lb, Btn.back].forEach(b => {
+    ctx.fillStyle = '#fff'; ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = '#000';
+    if (b === Btn.srLeaderboard) {
+      // two-line text
+      const lines = ['Speed Run', 'Leaderboard'];
+      const fontSize = 16 * (WIDTH / 288);
+      ctx.font = `${fontSize}px Arial`;
+      const lh = fontSize + 4;
+      lines.forEach((l, i) => {
+        ctx.fillText(l, b.x + (b.w - ctx.measureText(l).width) / 2, b.y + (i + 1) * lh);
+      });
+    } else {
+      ctx.font = `${20 * (WIDTH / 288)}px Arial`;
+      ctx.fillText(
+        b.label,
+        b.x + (b.w - ctx.measureText(b.label).width) / 2,
+        b.y + 32 * (WIDTH / 288)
+      );
+    }
+  });
+  // Duck above Start
+  const duckX = Btn.start.x + (Btn.start.w - bird.w) / 2;
+  const duckY = Btn.start.y - bird.h - 10;
+  const bob = 8 * Math.sin(performance.now() / 200);
+  ctx.drawImage(IMG[`bird${bird.variant}`], duckX, duckY + bob, bird.w, bird.h);
 }
 
 // — Draw Game Over
-function drawGameOver(){
-  ctx.drawImage(IMG.bg0,0,0,WIDTH,HEIGHT);
+function drawGameOver() {
+  ctx.drawImage(IMG.bg0, 0, 0, WIDTH, HEIGHT);
   tileBase();
-  ctx.drawImage(IMG.over,(WIDTH-IMG.over.width)/2,HEIGHT*0.2);
+  ctx.drawImage(IMG.over, (WIDTH - IMG.over.width) / 2, HEIGHT * 0.2);
+
+  // display final score
   const scoreText = `Score: ${score}`;
   ctx.fillStyle = '#fff';
-  ctx.font = `${24*(WIDTH/288)}px Arial`;
+  const fontSize = 24 * (WIDTH / 288);
+  ctx.font = `${fontSize}px Arial`;
   const textW = ctx.measureText(scoreText).width;
-  ctx.fillText(scoreText, (WIDTH-textW)/2, HEIGHT*0.4);
-  Btn.start.x=WIDTH/2-160; Btn.start.y=HEIGHT*0.6;
-  const lb=gameMode==='CLASSIC'?Btn.leaderboard:Btn.srLeaderboard;
-  lb.x=WIDTH/2+10; lb.y=HEIGHT*0.6;
-  [Btn.start,lb].forEach(b=>{
-    ctx.fillStyle='#fff'; ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.fillStyle='#000'; ctx.font=`${20*(WIDTH/288)}px Arial`;
-    ctx.fillText(
-      b.label,
-      b.x + (b.w - ctx.measureText(b.label).width)/2,
-      b.y + 32*(WIDTH/288)
-    );
+  ctx.fillText(scoreText, (WIDTH - textW) / 2, HEIGHT * 0.4);
+
+  // position buttons
+  Btn.start.x = WIDTH / 2 - 160;
+  Btn.start.y = HEIGHT * 0.6;
+  const lb = gameMode === 'CLASSIC' ? Btn.leaderboard : Btn.srLeaderboard;
+  lb.x = WIDTH / 2 + 10;
+  lb.y = HEIGHT * 0.6;
+
+  // draw Start and Leaderboard with multiline for SR
+  [Btn.start, lb].forEach(b => {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = '#000';
+
+    if (b === Btn.srLeaderboard) {
+      const lines = ['Speed Run', 'Leaderboard'];
+      const fm = 16 * (WIDTH / 288);
+      ctx.font = `${fm}px Arial`;
+      const lh = fm + 4;
+      lines.forEach((line, i) => {
+        const w = ctx.measureText(line).width;
+        ctx.fillText(line, b.x + (b.w - w) / 2, b.y + (i + 1) * lh);
+      });
+    } else {
+      const fm = 20 * (WIDTH / 288);
+      ctx.font = `${fm}px Arial`;
+      const w = ctx.measureText(b.label).width;
+      ctx.fillText(b.label, b.x + (b.w - w) / 2, b.y + 32 * (WIDTH / 288));
+    }
   });
 }
 
@@ -335,13 +373,18 @@ function startPlay(){
   bird.vy    = 0;
   bird.x     = WIDTH * 0.2;
   bird.y     = (HEIGHT - bird.h)/2;
+  // reset timing & pipes
   spawnTimer = -CLASSIC_SETTINGS.SPAWN_INT;
   lastTime   = performance.now();
+  pipes      = [];
+  // reset difficulty
   lastDifficultyScore = 0;
   difficultyCycle     = 0;
-  if (variantBag.length===0) refillVariantBag();
-  bird.variant = variantBag.pop();
-  pipes = []; // initial
+  // ensure variantbag has current pick at top
+  if (variantBag.length === 0) refillVariantBag();
+  // do not pop a new variant: keep current bird.variant
+  // spawn initial pipes
+  spawnInitial();
   AUD.wing.play();
 }
 
