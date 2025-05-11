@@ -164,6 +164,54 @@ bot.onText(/^!kill\s+(\S+)\s+(classic|speed)$/i, (msg, match) => {
     else bot.sendMessage(chatId, `⚠️ ${username} not found on Speed-Run leaderboard.`);
   }
 });
+
+bot.onText(/^!analytics$/, (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (ADMIN_ID === null || userId !== ADMIN_ID) {
+    return bot.sendMessage(chatId, '🚫 You are not authorized to use this command.');
+  }
+
+  getAnalytics((err, rows) => {
+    if (err) {
+      console.error('Analytics error:', err);
+      return bot.sendMessage(chatId, '❌ Failed to fetch analytics.');
+    }
+    if (!rows.length) {
+      return bot.sendMessage(chatId, 'ℹ️ No analytics data yet.');
+    }
+
+    // Calculate totals across all players
+    const totalClassicMinutes = rows.reduce((sum, r) => sum + r.classic_time_played, 0);
+    const totalSpeedMinutes = rows.reduce((sum, r) => sum + r.speed_time_played, 0);
+
+    // Format per-player data as JSON-like strings
+    const lines = rows.map(r => {
+      return JSON.stringify({
+        username: r.username,
+        classic_time_played: r.classic_time_played,
+        speed_time_played: r.speed_time_played,
+        classic_high_score: r.classic_high_score,
+        speed_high_score: r.speed_high_score
+      }, null, 2).replace(/\n/g, '\n    ');
+    });
+
+    // Construct message
+    const text = [
+      '🦆 *Game Analytics* 🦆',
+      'Note: High scores are sourced from JSON leaderboards and may be 0 if reset.',
+      '',
+      '*Per Player:*',
+      ...lines.map(line => '```json\n' + line + '\n```'),
+      '',
+      '*Totals Across All Players:*',
+      `Classic: ${totalClassicMinutes.toFixed(2)} minutes`,
+      `Speed Run: ${totalSpeedMinutes.toFixed(2)} minutes`
+    ].join('\n');
+
+    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  });
+});
 // ── sendWelcome ──────────────────────────────────────────────────────────────
 function sendWelcome(msg) {
   const chatId = msg.chat.id;
@@ -264,6 +312,17 @@ app.post('/flappy_quakks/SR-submit', (req, res) => {
     res.status(500).json({ error:'Could not save SR leaderboard' });
   }
 });
+
+// Classic Leaderboard JSON
+app.get('/flappy_quakks/leaderboard', (req, res) => {
+  res.json(leaderboard.slice(0, 10));
+});
+
+// Speed-Run Leaderboard JSON
+app.get('/flappy_quakks/SR-leaderboard', (req, res) => {
+  res.json(srLeaderboard.slice(0, 10));
+});
+
 
 // ── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
