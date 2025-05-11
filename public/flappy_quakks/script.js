@@ -1,4 +1,5 @@
 console.log('✅ script.js loaded');
+const startTime = performance.now();
 
 // — Import Speed Run settings
 import * as SpeedRunSettings from './speedRunSettings.js';
@@ -452,21 +453,33 @@ function tileBase(){
 }
 
 // — Handle Game Over
-async function handleGameOver(){
-  if (state!=='PLAY') return;
-  state='GAMEOVER';
+async function handleGameOver(score) {
+  if (state !== 'PLAY') return;
+  state = 'GAMEOVER';
   AUD.hit.play(); AUD.die.play();
-  const tg = window.Telegram?.WebApp;
+
+  // build username
+  const tg   = window.Telegram?.WebApp;
   const user = tg?.initDataUnsafe?.user || {};
-  const username = user.username ? '@'+user.username : `${user.first_name}_${user.id}`;
+  const username = user.username
+    ? '@' + user.username
+    : `${user.first_name}_${user.id}`;
+
+  // calculate duration
+  const durationMs = performance.now() - startTime;
+  const mode       = gameMode === 'CLASSIC' ? 'classic' : 'speed';
+
+  // send it off
   try {
-    const endpoint = gameMode==='CLASSIC'?'submit':'SR-submit';
-    await fetch(`${location.origin}/flappy_quakks/${endpoint}`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ username, score })
+    const endpoint = mode === 'classic' ? 'submit' : 'SR-submit';
+    await fetch(`${location.origin}/flappy_quakks/${endpoint}`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username, mode, score, durationMs })
     });
-  } catch(e){ console.error('Submit error:', e); }
+  } catch (e) {
+    console.error('Submit error:', e);
+  }
 }
 
 // — Main Loop

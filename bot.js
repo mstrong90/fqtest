@@ -15,6 +15,9 @@ const LB_PATH = path.join(__dirname, 'public', 'flappy_quakks', 'leaderboard.jso
 const SR_PATH = path.join(__dirname, 'public', 'flappy_quakks', 'sr-leaderboard.json');
 console.log('Saving SR scores to →', SR_PATH);
 
+const { recordPlayTime, recordHighScore, getAnalytics } = require('./analytics');
+
+
 // ── Quakk pick persistence ───────────────────────────────────────────────────
 const PICKS_PATH = path.join(__dirname, 'QuakkPicks.json');
 if (!fs.existsSync(PICKS_PATH)) {
@@ -206,27 +209,61 @@ app.post('/flappy_quakks/selectQuakk', (req, res) => {
 
 // ── Classic Leaderboard Endpoints ─────────────────────────────────────────
 app.post('/flappy_quakks/submit', (req, res) => {
-  const { username, score } = req.body;
-  if (typeof username!=='string'||typeof score!=='number') return res.status(400).json({error:'Invalid payload'});
+  const { username, score, mode, durationMs } = req.body;
+  if (typeof username!=='string' 
+      || typeof score!=='number' 
+      || typeof durationMs!=='number') {
+    return res.status(400).json({ error:'Invalid payload' });
+  }
+  // leaderboard JSON logic (unchanged)…
   const existing = leaderboard.find(e=>e.username===username);
-  if (existing){ if (score>existing.score) existing.score = score; }
-  else leaderboard.push({ username, score });
+  if (existing) {
+    if (score > existing.score) existing.score = score;
+  } else {
+    leaderboard.push({ username, score });
+  }
   leaderboard.sort((a,b)=>b.score-a.score);
-  try{ saveLeaderboard(); res.json({status:'ok'}); } catch{ res.status(500).json({error:'Could not save leaderboard'}); }
+  leaderboard = leaderboard.slice(0,10);
+  try {
+    saveLeaderboard();
+    // record into analytics.db
+    recordPlayTime(username, 'classic', durationMs);
+    recordHighScore(username, 'classic', score);
+    res.json({ status:'ok' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error:'Could not save leaderboard' });
+  }
 });
-app.get('/flappy_quakks/leaderboard', (req, res) => { res.json(leaderboard.slice(0,10)); });
 
 // ── Speed-Run Leaderboard Endpoints ─────────────────────────────────────────
 app.post('/flappy_quakks/SR-submit', (req, res) => {
-  const { username, score } = req.body;
-  if (typeof username!=='string'||typeof score!=='number') return res.status(400).json({error:'Invalid payload'});
+  const { username, score, mode, durationMs } = req.body;
+  if (typeof username!=='string' 
+      || typeof score!=='number' 
+      || typeof durationMs!=='number') {
+    return res.status(400).json({ error:'Invalid payload' });
+  }
+  // srLeaderboard JSON logic (unchanged)…
   const existing = srLeaderboard.find(e=>e.username===username);
-  if (existing){ if (score>existing.score) existing.score = score; }
-  else srLeaderboard.push({ username, score });
+  if (existing) {
+    if (score > existing.score) existing.score = score;
+  } else {
+    srLeaderboard.push({ username, score });
+  }
   srLeaderboard.sort((a,b)=>b.score-a.score);
-  try{ saveSRLeaderboard(); res.json({status:'ok'}); } catch{ res.status(500).json({error:'Could not save SR leaderboard'}); }
+  srLeaderboard = srLeaderboard.slice(0,10);
+  try {
+    saveSRLeaderboard();
+    // record into analytics.db
+    recordPlayTime(username, 'speed', durationMs);
+    recordHighScore(username, 'speed', score);
+    res.json({ status:'ok' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error:'Could not save SR leaderboard' });
+  }
 });
-app.get('/flappy_quakks/SR-leaderboard', (req, res) => { res.json(srLeaderboard.slice(0,10)); });
 
 // ── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
