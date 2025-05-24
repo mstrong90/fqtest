@@ -3,6 +3,7 @@ const express     = require('express');
 const path        = require('path');
 const fs          = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
+const { getAnalytics, recordPlayTime } = require('./analytics');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 const TOKEN      = process.env.BOT_TOKEN;
@@ -14,9 +15,6 @@ const ADMIN_ID   = process.env.ADMIN_ID ? parseInt(process.env.ADMIN_ID, 10) : n
 const LB_PATH = path.join(__dirname, 'public', 'flappy_quakks', 'leaderboard.json');
 const SR_PATH = path.join(__dirname, 'public', 'flappy_quakks', 'sr-leaderboard.json');
 console.log('Saving SR scores to →', SR_PATH);
-
-const { recordPlayTime, recordHighScore, getAnalytics } = require('./analytics');
-
 
 // ── Quakk pick persistence ───────────────────────────────────────────────────
 const PICKS_PATH = path.join(__dirname, 'QuakkPicks.json');
@@ -52,6 +50,7 @@ function loadLeaderboard() {
 function saveLeaderboard() {
   fs.writeFileSync(LB_PATH, JSON.stringify(leaderboard, null, 2), 'utf-8');
 }
+
 if (!fs.existsSync(SR_PATH)) {
   fs.writeFileSync(SR_PATH, '[]', 'utf-8');
 }
@@ -83,8 +82,9 @@ loadSRLeaderboard();
 // ── Telegram Bot Setup ────────────────────────────────────────────────────────
 const bot = new TelegramBot(TOKEN, { polling: true });
 bot.on('polling_error', console.error);
+
 // Command pattern for /start and /flap
-const cmdPattern = /^\/(start|flap)(@\w+)?$/;
+const cmdPattern = /^\/(start)(@\w+)?$/;
 bot.onText(cmdPattern, msg => sendWelcome(msg));
 bot.on('callback_query', q => bot.answerCallbackQuery(q.id));
 
@@ -109,6 +109,7 @@ bot.onText(/^\/resetspeed(@\w+)?$/, (msg) => {
   saveSRLeaderboard();
   bot.sendMessage(chatId, '🦆 Speed-Run leaderboard has been reset.');
 });
+
 // ── Admin-only Change Classic Score ──────────────────────────────────────────
 bot.onText(/^!changeclassic\s+(\d+)$/, (msg, match) => {
   const chatId = msg.chat.id;
@@ -126,6 +127,7 @@ bot.onText(/^!changeclassic\s+(\d+)$/, (msg, match) => {
   saveLeaderboard();
   bot.sendMessage(chatId, `✅ Classic score for ${username} set to ${newScore}.`);
 });
+
 // ── Admin-only Change Speed-Run Score ─────────────────────────────────────────
 bot.onText(/^!changespeed\s+(\d+)$/, (msg, match) => {
   const chatId = msg.chat.id;
@@ -143,6 +145,7 @@ bot.onText(/^!changespeed\s+(\d+)$/, (msg, match) => {
   saveSRLeaderboard();
   bot.sendMessage(chatId, `✅ Speed-Run score for ${username} set to ${newScore}.`);
 });
+
 // ── Admin-only Kill Command ───────────────────────────────────────────────────
 bot.onText(/^!kill\s+(\S+)\s+(classic|speed)$/i, (msg, match) => {
   const chatId = msg.chat.id;
@@ -150,22 +153,32 @@ bot.onText(/^!kill\s+(\S+)\s+(classic|speed)$/i, (msg, match) => {
   if (ADMIN_ID === null || userId !== ADMIN_ID) {
     return bot.sendMessage(chatId, '🚫 You are not authorized to use this command.');
   }
-  let username = match[1]; if (!username.startsWith('@')) username = '@'+username;
+  let username = match[1];
+  if (!username.startsWith('@')) username = '@' + username;
   const mode = match[2].toLowerCase();
-  if (mode==='classic'){
+  if (mode === 'classic') {
     const before = leaderboard.length;
-    leaderboard = leaderboard.filter(e=>e.username!==username);
-    if (leaderboard.length<before){ saveLeaderboard(); bot.sendMessage(chatId, `✅ Removed ${username} from Classic leaderboard.`);} 
-    else bot.sendMessage(chatId, `⚠️ ${username} not found on Classic leaderboard.`);
+    leaderboard = leaderboard.filter(e => e.username !== username);
+    if (leaderboard.length < before) {
+      saveLeaderboard();
+      bot.sendMessage(chatId, `✅ Removed ${username} from Classic leaderboard.`);
+    } else {
+      bot.sendMessage(chatId, `⚠️ ${username} not found on Classic leaderboard.`);
+    }
   } else {
     const before = srLeaderboard.length;
-    srLeaderboard = srLeaderboard.filter(e=>e.username!==username);
-    if (srLeaderboard.length<before){ saveSRLeaderboard(); bot.sendMessage(chatId, `✅ Removed ${username} from Speed-Run leaderboard.`);} 
-    else bot.sendMessage(chatId, `⚠️ ${username} not found on Speed-Run leaderboard.`);
+    srLeaderboard = srLeaderboard.filter(e => e.username !== username);
+    if (srLeaderboard.length < before) {
+      saveSRLeaderboard();
+      bot.sendMessage(chatId, `✅ Removed ${username} from Speed-Run leaderboard.`);
+    } else {
+      bot.sendMessage(chatId, `⚠️ ${username} not found on Speed-Run leaderboard.`);
+    }
   }
 });
 
-bot.onText(/^!analytics$/, (msg) => {
+// ── Analytics Command ────────────────────────────────────────────────────────
+bot.onText(/^!analytics$/, msg => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (ADMIN_ID === null || userId !== ADMIN_ID) {
@@ -177,39 +190,52 @@ bot.onText(/^!analytics$/, (msg) => {
       console.error('Analytics error:', err);
       return bot.sendMessage(chatId, '❌ Failed to fetch analytics.');
     }
-    if (!rows.length) {
+    if (rows.length === 0) {
       return bot.sendMessage(chatId, 'ℹ️ No analytics data yet.');
     }
 
-    // Calculate totals across all players
-    const totalClassicMinutes = rows.reduce((sum, r) => sum + r.classic_time_played, 0);
-    const totalSpeedMinutes = rows.reduce((sum, r) => sum + r.speed_time_played, 0);
+    // helper to turn minutes (float) into HH:MM:SS
+    function formatDuration(minutesFloat) {
+      const totalSeconds = Math.round(minutesFloat * 60);
+      const hrs  = Math.floor(totalSeconds / 3600);
+      const mins = Math.floor((totalSeconds % 3600) / 60);
+      const secs = totalSeconds % 60;
+      return `${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+    }
 
-    // Format per-player data as JSON-like strings
-    const lines = rows.map(r => {
-      return JSON.stringify({
-        username: r.username,
-        classic_time_played: r.classic_time_played,
-        speed_time_played: r.speed_time_played,
-        classic_high_score: r.classic_high_score,
-        speed_high_score: r.speed_high_score
-      }, null, 2).replace(/\n/g, '\n    ');
+    // build per-user blocks with a blank line after each
+    const blocks = [];
+    rows.forEach(r => {
+      blocks.push(`${r.username}--`);
+      blocks.push(`    Classic Score: ${r.classic_high_score}`);
+      blocks.push(`    Classic Time: ${formatDuration(r.classic_time_played)}`);
+      blocks.push(`    Speed Run Score: ${r.speed_high_score}`);
+      blocks.push(`    Speed Run Time: ${formatDuration(r.speed_time_played)}`);
+      blocks.push('');  // blank line
     });
+    // remove trailing blank line
+    if (blocks[blocks.length - 1] === '') blocks.pop();
 
-    // Construct message
+    // totals
+    const totalClassic = formatDuration(
+      rows.reduce((sum, r) => sum + r.classic_time_played, 0)
+    );
+    const totalSpeed   = formatDuration(
+      rows.reduce((sum, r) => sum + r.speed_time_played, 0)
+    );
+
+    // assemble the message
     const text = [
-      '🦆 *Game Analytics* 🦆',
-      'Note: High scores are sourced from JSON leaderboards and may be 0 if reset.',
+      '🦆Game Analytics🦆',
       '',
-      '*Per Player:*',
-      ...lines.map(line => '```json\n' + line + '\n```'),
+      ...blocks,
       '',
-      '*Totals Across All Players:*',
-      `Classic: ${totalClassicMinutes.toFixed(2)} minutes`,
-      `Speed Run: ${totalSpeedMinutes.toFixed(2)} minutes`
+      `Total Classic Time: ${totalClassic}`,
+      `Total Speed Run Time: ${totalSpeed}`
     ].join('\n');
 
-    bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    // send as plain text
+    bot.sendMessage(chatId, text);
   });
 });
 // ── sendWelcome ──────────────────────────────────────────────────────────────
@@ -217,16 +243,17 @@ function sendWelcome(msg) {
   const chatId = msg.chat.id;
   const isPrivate = msg.chat.type === 'private';
   let button;
-  if (isPrivate) button = { text: '▶️ Play Flappy Quakks', web_app:{url:GAME_URL} };
-  else {
-    const from=msg.from;
-    const uname = from.username? '@'+from.username : `${from.first_name}_${from.id}`;
+  if (isPrivate) {
+    button = { text: '▶️ Play Flappy Quakks', web_app: { url: GAME_URL } };
+  } else {
+    const from = msg.from;
+    const uname = from.username ? '@' + from.username : `${from.first_name}_${from.id}`;
     const urlWithUser = `${GAME_URL}?username=${encodeURIComponent(uname)}`;
-    button = { text: '▶️ Play Flappy Quakks', url:urlWithUser };
+    button = { text: '▶️ Play Flappy Quakks', url: urlWithUser };
   }
   bot.sendMessage(chatId,
     'Welcome to 🦆 Flappy Quakks!\nTap below to begin.',
-    { reply_markup:{ inline_keyboard:[[button]] } }
+    { reply_markup: { inline_keyboard: [[button]] } }
   );
 }
 
@@ -241,88 +268,108 @@ app.use(
 // ── Quakk pick endpoints ───────────────────────────────────────────────────
 app.get('/flappy_quakks/getQuakk', (req, res) => {
   const { username } = req.query;
-  if (!username) return res.status(400).json({ error:'username required' });
+  if (!username) return res.status(400).json({ error: 'username required' });
   const picks = readPicks();
   res.json({ variant: picks[username] ?? null });
 });
-
 app.post('/flappy_quakks/selectQuakk', (req, res) => {
   const { username, variant } = req.body;
-  if (!username || variant == null) return res.status(400).json({ error:'username & variant required' });
+  if (!username || variant == null) {
+    return res.status(400).json({ error: 'username & variant required' });
+  }
   const picks = readPicks();
   picks[username] = variant;
   writePicks(picks);
-  res.json({ success:true });
+  res.json({ success: true });
 });
 
 // ── Classic Leaderboard Endpoints ─────────────────────────────────────────
 app.post('/flappy_quakks/submit', (req, res) => {
-  const { username, score, mode, durationMs } = req.body;
-  if (typeof username!=='string' 
-      || typeof score!=='number' 
-      || typeof durationMs!=='number') {
-    return res.status(400).json({ error:'Invalid payload' });
+  const { username, score, durationMs } = req.body;
+
+  // basic validation
+  if (typeof username !== 'string' || typeof score !== 'number') {
+    return res.status(400).json({ error: 'Invalid payload' });
   }
-  // leaderboard JSON logic (unchanged)…
-  const existing = leaderboard.find(e=>e.username===username);
+
+  // update or insert high score
+  const existing = leaderboard.find(e => e.username === username);
   if (existing) {
-    if (score > existing.score) existing.score = score;
+    existing.score = Math.max(existing.score, score);
   } else {
     leaderboard.push({ username, score });
   }
-  leaderboard.sort((a,b)=>b.score-a.score);
-  leaderboard = leaderboard.slice(0,10);
+  leaderboard.sort((a, b) => b.score - a.score);
+
+  // persist the full leaderboard
   try {
     saveLeaderboard();
-    // record into analytics.db
+  } catch {
+    return res.status(500).json({ error: 'Could not save leaderboard' });
+  }
+
+  // record time played if the front-end sent it
+  if (typeof durationMs === 'number') {
     recordPlayTime(username, 'classic', durationMs);
-    recordHighScore(username, 'classic', score);
-    res.json({ status:'ok' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error:'Could not save leaderboard' });
   }
+
+  res.json({ status: 'ok' });
 });
 
-// ── Speed-Run Leaderboard Endpoints ─────────────────────────────────────────
-app.post('/flappy_quakks/SR-submit', (req, res) => {
-  const { username, score, mode, durationMs } = req.body;
-  if (typeof username!=='string' 
-      || typeof score!=='number' 
-      || typeof durationMs!=='number') {
-    return res.status(400).json({ error:'Invalid payload' });
-  }
-  // srLeaderboard JSON logic (unchanged)…
-  const existing = srLeaderboard.find(e=>e.username===username);
-  if (existing) {
-    if (score > existing.score) existing.score = score;
-  } else {
-    srLeaderboard.push({ username, score });
-  }
-  srLeaderboard.sort((a,b)=>b.score-a.score);
-  srLeaderboard = srLeaderboard.slice(0,10);
-  try {
-    saveSRLeaderboard();
-    // record into analytics.db
-    recordPlayTime(username, 'speed', durationMs);
-    recordHighScore(username, 'speed', score);
-    res.json({ status:'ok' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error:'Could not save SR leaderboard' });
-  }
-});
-
-// Classic Leaderboard JSON
 app.get('/flappy_quakks/leaderboard', (req, res) => {
+  // still only send top 10 to the client
   res.json(leaderboard.slice(0, 10));
 });
 
-// Speed-Run Leaderboard JSON
+// ── Speed-Run Leaderboard Endpoints ────────────────────────────────────────
+app.post('/flappy_quakks/SR-submit', (req, res) => {
+  const { username, score, durationMs } = req.body;
+
+  if (typeof username !== 'string' || typeof score !== 'number') {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const existing = srLeaderboard.find(e => e.username === username);
+  if (existing) {
+    existing.score = Math.max(existing.score, score);
+  } else {
+    srLeaderboard.push({ username, score });
+  }
+  srLeaderboard.sort((a, b) => b.score - a.score);
+
+  try {
+    saveSRLeaderboard();
+  } catch {
+    return res.status(500).json({ error: 'Could not save SR leaderboard' });
+  }
+
+  if (typeof durationMs === 'number') {
+    recordPlayTime(username, 'speed', durationMs);
+  }
+
+  res.json({ status: 'ok' });
+});
+
 app.get('/flappy_quakks/SR-leaderboard', (req, res) => {
   res.json(srLeaderboard.slice(0, 10));
 });
 
+// ── Show Speed-Run Leaderboard ───────────────────────────────────────────────
+bot.onText(/^\/speedlead(@\w+)?$/, (msg) => {
+  const chatId = msg.chat.id;
+
+  if (srLeaderboard.length === 0) {
+    return bot.sendMessage(chatId, 'ℹ️ The Speed-Run leaderboard is currently empty.');
+  }
+
+  // build a clean list
+  let text = '🏁 Speed-Run Leaderboard 🏁\n\n';
+  srLeaderboard.forEach((entry, i) => {
+    text += `${i + 1}. ${entry.username}: ${entry.score}\n`;
+  });
+
+  bot.sendMessage(chatId, text);
+});
 
 // ── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

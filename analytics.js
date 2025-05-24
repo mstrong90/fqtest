@@ -69,10 +69,10 @@ function getAnalytics(callback) {
       const speedHighScore = speedBoard.find(e => e.username === user.username)?.score || 0;
       return {
         username: user.username,
-        classic_time_played: user.classic_time_played,
-        speed_time_played: user.speed_time_played,
         classic_high_score: classicHighScore,
-        speed_high_score: speedHighScore
+        classic_time_played: user.classic_time_played,
+        speed_high_score: speedHighScore,
+        speed_time_played: user.speed_time_played
       };
     });
 
